@@ -1,35 +1,52 @@
 import scapy.all as scapy
-import optparse
+import argparse
+import sys
+from ipaddress import ip_network, IPv4Address  
 
-def get_arugments():
-    parser=optparse.OptionParser()
-    parser.add_option('-r','--range',dest='network_ip',help='To Enter Device IP or Network Range')
-    options,arugments=parser.parse_args()
+def get_arguments():
+    parser = argparse.ArgumentParser(description='Network scanner using ARP requests')
+    parser.add_argument('-r', '--range', dest='network', required=True,
+                        help='Network IP range to scan (e.g., 192.168.1.0/24)')
+    return parser.parse_args()
 
-    if not options.network_ip:
-        parser.error('[-] Please Specify an IP Adderss , -h For help')
+def validate_network(network):
+    try:
+        return ip_network(network, strict=False)
+    except ValueError:
+        sys.exit(f"[!] Invalid network range: {network}")
 
-    return options
+def scan(network):
+    validated_net = validate_network(network)
+    print(f"[*] Scanning {validated_net}...")
+    
+    arp_request = scapy.ARP(pdst=str(validated_net))
+    broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
+    arp_request_broadcast = broadcast/arp_request
 
-def scan(network_ip):
-    arp_request = scapy.ARP(pdst='10.0.2.1/24')
-    arp_broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
-    arp_request_broadcast = arp_broadcast/arp_request
-    answered = scapy.srp(arp_request_broadcast, timeout=1, verbose=False)[0]
-    device_list=[]
+    try:
+        answered, _ = scapy.srp(arp_request_broadcast, timeout=2, verbose=False)
+    except PermissionError:
+        sys.exit("[!] Permission denied. Try running with sudo.")
+    except Exception as e:
+        sys.exit(f"[!] Error occurred: {e}")
 
-    for ans in answered:
-        device_dict={'ip':ans[1].psrc ,'mac':ans[1].hwsrc}
-        device_list.append(device_dict)
+    devices = [{'ip': packet[1].psrc, 'mac': packet[1].hwsrc} 
+               for packet in answered]
+    return sorted(devices, key=lambda x: IPv4Address(x['ip']).packed)
 
-    return device_list
 
-def display_device(devices):
-    print("IP Address \t\t MAC Address")
-    print("-"*45,'\n')
+def display_results(devices):
+    if not devices:
+        print("[*] No devices found.")
+        return
+
+    print("\nIP Address\t\tMAC Address")
+    print("-----------------------------------------")
     for device in devices:
-        print(device["ip"],'\t\t',device["mac"])
+        print(f"{device['ip']}\t\t{device['mac']}")
+    print(f"\n[*] Found {len(devices)} devices.")
 
-options = get_arugments()
-devices=scan(options.network_ip)
-display_device(devices)
+if __name__ == "__main__":
+    args = get_arguments()
+    devices = scan(args.network)
+    display_results(devices)
